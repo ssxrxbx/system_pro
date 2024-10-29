@@ -2,7 +2,6 @@
 #include <time.h>
 
 float io_count = 0;
-
 time_t last_print_time = 0;
 
 // #define FEMU_DEBUG_FTL
@@ -908,17 +907,6 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     return maxlat;
 }
 
-// IOPS 데이터를 저장할 파일 포인터
-FILE *iops_file;
-
-// IOPS 데이터를 기록하는 함수
-void log_iops(float iops) {
-    if (iops_file) {
-        fprintf(iops_file, "%f\n", iops);
-        fflush(iops_file); // 버퍼를 비워서 즉시 파일에 기록
-    }
-}
-
 static void *ftl_thread(void *arg)
 {
     FemuCtrl *n = (FemuCtrl *)arg;
@@ -936,13 +924,6 @@ static void *ftl_thread(void *arg)
     /* FIXME: not safe, to handle ->to_ftl and ->to_poller gracefully */
     ssd->to_ftl = n->to_ftl;
     ssd->to_poller = n->to_poller;
-
-    // IOPS 파일 열기
-    iops_file = fopen("iops_data.txt", "w");
-    if (!iops_file) {
-        ftl_err("Failed to open IOPS data file\n");
-        return NULL;
-    }
 
     while (1)
     {
@@ -976,9 +957,6 @@ static void *ftl_thread(void *arg)
                     io_count = 0;
                 }
 
-                // IOPS 기록
-                log_iops(io_count);
-
                 break;
 
             case NVME_CMD_READ:
@@ -996,9 +974,6 @@ static void *ftl_thread(void *arg)
                     last_print_time = re_current_time;
                     io_count = 0;
                 }
-
-                // IOPS 기록
-                log_iops(io_count);
 
                 break;
             case NVME_CMD_DSM:
@@ -1026,7 +1001,5 @@ static void *ftl_thread(void *arg)
         }
     }
 
-    // 파일 닫기
-    fclose(iops_file);
     return NULL;
 }
