@@ -799,7 +799,7 @@ static int do_gc(struct ssd *ssd, bool force)
             erased_blocks_count++; // 회수된 블록 수 증가
 
             // 유효 페이지가 이동할 때마다 카운트 증가
-            valid_pages_moved_count += /* 이동한 유효 페이지 수를 여기에 추가 */;
+            valid_pages_moved_count += ; /* 이동한 유효 페이지 수를 여기에 추가 */
 
             if (spp->enable_gc_delay)
             {
