@@ -86,6 +86,24 @@ static inline void victim_line_set_pos(void *a, size_t pos)
     ((struct line *)a)->pos = pos;
 }
 
+static int get_valid_page_count(struct ssd *ssd, struct ppa *ppa)
+{
+    struct nand_block *blk = get_blk(ssd, ppa);
+    int valid_count = 0;
+
+    // 블록 내의 모든 페이지를 확인하여 유효 페이지 수를 계산
+    for (int pg = 0; pg < ssd->sp.pgs_per_blk; pg++)
+    {
+        struct nand_page *page = &blk->pg[pg];
+        if (page->status == PG_VALID)
+        {
+            valid_count++;
+        }
+    }
+
+    return valid_count;
+}
+
 static void ssd_init_lines(struct ssd *ssd)
 {
     struct ssdparams *spp = &ssd->sp;
@@ -918,21 +936,6 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     return maxlat;
 }
 
-static int get_valid_page_count(struct ssd *ssd, struct ppa *ppa) {
-    struct nand_block *blk = get_blk(ssd, ppa);
-    int valid_count = 0;
-
-    // 블록 내의 모든 페이지를 확인하여 유효 페이지 수를 계산
-    for (int pg = 0; pg < ssd->sp.pgs_per_blk; pg++) {
-        struct nand_page *page = &blk->pg[pg];
-        if (page->status == PG_VALID) {
-            valid_count++;
-        }
-    }
-
-    return valid_count;
-}
-
 static void *ftl_thread(void *arg)
 {
     FemuCtrl *n = (FemuCtrl *)arg;
@@ -989,7 +992,7 @@ static void *ftl_thread(void *arg)
             {
             case NVME_CMD_WRITE:
                 lat = ssd_write(ssd, req);
-                io_count_per_second++;                                        // IOPS 카운트 증가
+                io_count_per_second++;                                         // IOPS 카운트 증가
                 total_bytes += req->nlb * ssd->sp.secs_per_pg * ssd->sp.secsz; // 전송된 바이트 수 증가
 
                 // IOPS 및 Throughput을 1초마다 기록
@@ -1014,7 +1017,7 @@ static void *ftl_thread(void *arg)
                 break;
             case NVME_CMD_READ:
                 lat = ssd_read(ssd, req);
-                io_count_per_second++;                                        // IOPS 카운트 증가
+                io_count_per_second++;                                         // IOPS 카운트 증가
                 total_bytes += req->nlb * ssd->sp.secs_per_pg * ssd->sp.secsz; // 전송된 바이트 수 증가
 
                 // IOPS 및 Throughput을 1초마다 출력
