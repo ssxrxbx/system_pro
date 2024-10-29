@@ -1,5 +1,8 @@
 #include "ftl.h"
 #include <time.h>
+#include <stdio.h>
+
+FILE *log_file; // 로그 파일 포인터
 
 // #define FEMU_DEBUG_FTL
 
@@ -811,6 +814,7 @@ static int do_gc(struct ssd *ssd, bool force)
     if (current_time - last_gc_print_time >= 10)
     {
         printf("GC: Erased blocks in last 10 seconds: %d, Moved pages: %d\n", erased_blocks, moved_pages);
+        fprintf(log_file, "GC: Erased blocks in last 10 seconds: %d, Moved pages: %d\n", erased_blocks, moved_pages);
         last_gc_print_time = current_time;
         erased_blocks = 0;
         moved_pages = 0;
@@ -926,6 +930,14 @@ static void *ftl_thread(void *arg)
     int rc;
     int i;
 
+    // 로그 파일 열기
+    log_file = fopen("performance_log.txt", "w");
+    if (!log_file)
+    {
+        perror("Failed to open log file");
+        return NULL;
+    }
+
     while (!*(ssd->dataplane_started_ptr))
     {
         usleep(100000);
@@ -985,7 +997,11 @@ static void *ftl_thread(void *arg)
                                   (end_time.tv_nsec - start_time.tv_nsec) / 1e9;
 
             // IOPS 및 Throughput 계산
-            printf("IOPS: 1, Throughput: %f MB/s\n", (req->nlb * 512) / (1024 * 1024) / elapsed_time);
+            double throughput = (req->nlb * 512) / (1024 * 1024) / elapsed_time; // MB/s
+            printf("IOPS: 1, Throughput: %f MB/s\n", throughput);
+
+            // 로그 파일에 기록
+            fprintf(log_file, "IOPS: 1, Throughput: %f MB/s\n", throughput);
 
             req->reqlat = lat;
             req->expire_time += lat;
@@ -1008,11 +1024,14 @@ static void *ftl_thread(void *arg)
         if (current_time - last_io_print_time >= 1)
         {
             printf("IOPS: %d, Throughput: %.2f MB/s\n", io_count, total_data_transferred);
+            fprintf(log_file, "IOPS: %d, Throughput: %.2f MB/s\n", io_count, total_data_transferred);
             last_io_print_time = current_time;
             io_count = 0;
             total_data_transferred = 0.0;
         }
     }
 
+    // 로그 파일 닫기
+    fclose(log_file);
     return NULL;
 }
