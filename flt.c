@@ -86,24 +86,6 @@ static inline void victim_line_set_pos(void *a, size_t pos)
     ((struct line *)a)->pos = pos;
 }
 
-static int get_valid_page_count(struct ssd *ssd, struct ppa *ppa)
-{
-    struct nand_block *blk = get_blk(ssd, ppa);
-    int valid_count = 0;
-
-    // 블록 내의 모든 페이지를 확인하여 유효 페이지 수를 계산
-    for (int pg = 0; pg < ssd->sp.pgs_per_blk; pg++)
-    {
-        struct nand_page *page = &blk->pg[pg];
-        if (page->status == PG_VALID)
-        {
-            valid_count++;
-        }
-    }
-
-    return valid_count;
-}
-
 static void ssd_init_lines(struct ssd *ssd)
 {
     struct ssdparams *spp = &ssd->sp;
@@ -817,7 +799,7 @@ static int do_gc(struct ssd *ssd, bool force)
             erased_blocks_count++; // 회수된 블록 수 증가
 
             // 유효 페이지가 이동할 때마다 카운트 증가
-            valid_pages_moved_count += get_valid_page_count(ssd, &ppa); // 유효 페이지 수를 가져오는 함수 필요
+            valid_pages_moved_count += /* 이동한 유효 페이지 수를 여기에 추가 */;
 
             if (spp->enable_gc_delay)
             {
