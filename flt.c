@@ -2,7 +2,8 @@
 #include <time.h>
 #include <stdio.h>
 
-FILE *log_file; // 로그 파일 포인터
+float io_count = 0;
+time_t last_print_time = 0;
 
 // #define FEMU_DEBUG_FTL
 
@@ -750,14 +751,6 @@ static void mark_line_free(struct ssd *ssd, struct ppa *ppa)
     lm->free_line_cnt++;
 }
 
-int io_count = 0;
-double total_data_transferred = 0.0; // MB 단위
-time_t last_io_print_time = 0;
-
-int erased_blocks = 0;
-int moved_pages = 0;
-time_t last_gc_print_time = 0;
-
 static int do_gc(struct ssd *ssd, bool force)
 {
     struct line *victim_line = NULL;
@@ -765,6 +758,21 @@ static int do_gc(struct ssd *ssd, bool force)
     struct nand_lun *lunp;
     struct ppa ppa;
     int ch, lun;
+    static int erased_blocks_count = 0; // 회수된 블록 수
+    static int valid_pages_moved_count = 0; // 이동한 유효 페이지 수
+    static time_t last_print_time = 0; // 마지막 출력 시간
+
+    time_t current_time = time(NULL);
+
+    // GC 수행 시 회수된 블록 수 및 이동한 유효 페이지 수 증가
+    if (current_time - last_print_time >= 10)
+    {
+        printf("Erased blocks reclaimed during GC: %d\n", erased_blocks_count);
+        printf("Valid pages moved during GC: %d\n", valid_pages_moved_count);
+        last_print_time = current_time;
+        erased_blocks_count = 0; // 카운트 초기화
+        valid_pages_moved_count = 0; // 카운트 초기화
+    }
 
     victim_line = select_victim_line(ssd, force);
     if (!victim_line)
@@ -788,10 +796,10 @@ static int do_gc(struct ssd *ssd, bool force)
             lunp = get_lun(ssd, &ppa);
             clean_one_block(ssd, &ppa);
             mark_block_free(ssd, &ppa);
+            erased_blocks_count++; // 회수된 블록 수 증가
 
-            // 통계 수집
-            erased_blocks++;
-            moved_pages += get_blk(ssd, &ppa)->vpc;
+            // 유효 페이지가 이동할 때마다 카운트 증가
+            valid_pages_moved_count += get_valid_page_count(ssd, &ppa); // 유효 페이지 수를 가져오는 함수 필요
 
             if (spp->enable_gc_delay)
             {
@@ -808,17 +816,6 @@ static int do_gc(struct ssd *ssd, bool force)
 
     /* update line status */
     mark_line_free(ssd, &ppa);
-
-    // 10초마다 GC 통계 출력
-    time_t current_time = time(NULL);
-    if (current_time - last_gc_print_time >= 10)
-    {
-        printf("GC: Erased blocks in last 10 seconds: %d, Moved pages: %d\n", erased_blocks, moved_pages);
-        fprintf(log_file, "GC: Erased blocks in last 10 seconds: %d, Moved pages: %d\n", erased_blocks, moved_pages);
-        last_gc_print_time = current_time;
-        erased_blocks = 0;
-        moved_pages = 0;
-    }
 
     return 0;
 }
@@ -930,13 +927,24 @@ static void *ftl_thread(void *arg)
     int rc;
     int i;
 
-    // 로그 파일 열기
-    log_file = fopen("performance_log.txt", "w");
-    if (!log_file)
-    {
-        perror("Failed to open log file");
+    // CSV 파일 열기
+    FILE *csv_file = fopen("performance_data.csv", "w");
+    if (csv_file == NULL) {
+        perror("Failed to open file");
         return NULL;
     }
+
+    // CSV 파일 헤더 작성
+    fprintf(csv_file, "time,iops,throughput,erased_blocks,valid_pages\n");
+
+    // IOPS 및 Throughput 기록을 위한 변수 추가
+    int io_count_per_second = 0;
+    double throughput_per_second = 0.0; // MB/s
+    time_t last_iops_time = time(NULL);
+    uint64_t total_bytes = 0; // 총 전송된 바이트 수
+    static int erased_blocks_count = 0; // 회수된 블록 수
+    static int valid_pages_moved_count = 0; // 이동한 유효 페이지 수
+    time_t last_gc_time = time(NULL);
 
     while (!*(ssd->dataplane_started_ptr))
     {
@@ -961,28 +969,48 @@ static void *ftl_thread(void *arg)
             }
 
             ftl_assert(req);
-
-            // I/O 요청의 시작 LBA 출력
-            printf("This IO’s start LBA is: %ld\n\r", req->slba);
-
-            // 요청 시작 시간 기록
-            struct timespec start_time, end_time;
-            clock_gettime(CLOCK_MONOTONIC, &start_time);
-
             switch (req->cmd.opcode)
             {
             case NVME_CMD_WRITE:
                 lat = ssd_write(ssd, req);
-                io_count++;
-                total_data_transferred += (req->nlb * 512) / (1024.0 * 1024.0); // MB로 변환
-                break;
+                io_count_per_second++; // IOPS 카운트 증가
+                total_bytes += req->nlb * ssd->sp.secs_per_pg * ssd->sp.secz; // 전송된 바이트 수 증가
 
+                // IOPS 및 Throughput을 1초마다 기록
+                if (time(NULL) - last_iops_time >= 1)
+                {
+                    throughput_per_second = (total_bytes / (1024.0 * 1024.0)); // MB로 변환
+                    fprintf(csv_file, "%ld,%d,%.2f,%d,%d\n", time(NULL), io_count_per_second, throughput_per_second, erased_blocks_count, valid_pages_moved_count);
+                    last_iops_time = time(NULL);
+                    io_count_per_second = 0; // 카운트 초기화
+                    total_bytes = 0; // 바이트 수 초기화
+                }
+
+                // GC 수행 시 회수된 블록 수 및 이동한 유효 페이지 수 증가
+                if (time(NULL) - last_gc_time >= 10)
+                {
+                    printf("Erased blocks reclaimed during GC: %d\n", erased_blocks_count);
+                    printf("Valid pages moved during GC: %d\n", valid_pages_moved_count);
+                    last_gc_time = time(NULL);
+                    erased_blocks_count = 0; // 카운트 초기화
+                    valid_pages_moved_count = 0; // 카운트 초기화
+                }
+                break;
             case NVME_CMD_READ:
                 lat = ssd_read(ssd, req);
-                io_count++;
-                total_data_transferred += (req->nlb * 512) / (1024.0 * 1024.0); // MB로 변환
-                break;
+                io_count_per_second++; // IOPS 카운트 증가
+                total_bytes += req->nlb * ssd->sp.secs_per_pg * ssd->sp.secz; // 전송된 바이트 수 증가
 
+                // IOPS 및 Throughput을 1초마다 출력
+                if (time(NULL) - last_iops_time >= 1)
+                {
+                    throughput_per_second = (total_bytes / (1024.0 * 1024.0)); // MB로 변환
+                    printf("IOPS: %d, Throughput: %.2f MB/s\n", io_count_per_second, throughput_per_second);
+                    last_iops_time = time(NULL);
+                    io_count_per_second = 0; // 카운트 초기화
+                    total_bytes = 0; // 바이트 수 초기화
+                }
+                break;
             case NVME_CMD_DSM:
                 lat = 0;
                 break;
@@ -990,18 +1018,6 @@ static void *ftl_thread(void *arg)
                 // ftl_err("FTL received unkown request type, ERROR\n");
                 ;
             }
-
-            // 요청 완료 시간 기록
-            clock_gettime(CLOCK_MONOTONIC, &end_time);
-            double elapsed_time = (end_time.tv_sec - start_time.tv_sec) +
-                                  (end_time.tv_nsec - start_time.tv_nsec) / 1e9;
-
-            // IOPS 및 Throughput 계산
-            double throughput = (req->nlb * 512) / (1024 * 1024) / elapsed_time; // MB/s
-            printf("IOPS: 1, Throughput: %f MB/s\n", throughput);
-
-            // 로그 파일에 기록
-            fprintf(log_file, "IOPS: 1, Throughput: %f MB/s\n", throughput);
 
             req->reqlat = lat;
             req->expire_time += lat;
@@ -1018,20 +1034,9 @@ static void *ftl_thread(void *arg)
                 do_gc(ssd, false);
             }
         }
-
-        // IOPS 및 Throughput 출력
-        time_t current_time = time(NULL);
-        if (current_time - last_io_print_time >= 1)
-        {
-            printf("IOPS: %d, Throughput: %.2f MB/s\n", io_count, total_data_transferred);
-            fprintf(log_file, "IOPS: %d, Throughput: %.2f MB/s\n", io_count, total_data_transferred);
-            last_io_print_time = current_time;
-            io_count = 0;
-            total_data_transferred = 0.0;
-        }
     }
 
-    // 로그 파일 닫기
-    fclose(log_file);
+    // CSV 파일 닫기
+    fclose(csv_file);
     return NULL;
 }
