@@ -758,20 +758,17 @@ static int do_gc(struct ssd *ssd, bool force)
     struct nand_lun *lunp;
     struct ppa ppa;
     int ch, lun;
-    static int erased_blocks_count = 0;     // 회수된 블록 수
-    static int valid_pages_moved_count = 0; // 이동한 유효 페이지 수
-    static time_t last_print_time = 0;      // 마지막 출력 시간
+    static int erased_blocks_count = 0; // 회수된 블록 수
+    static time_t last_print_time = 0; // 마지막 출력 시간
 
     time_t current_time = time(NULL);
 
-    // GC 수행 시 회수된 블록 수 및 이동한 유효 페이지 수 증가
+    // GC 수행 시 회수된 블록 수 증가
     if (current_time - last_print_time >= 10)
     {
         printf("Erased blocks reclaimed during GC: %d\n", erased_blocks_count);
-        printf("Valid pages moved during GC: %d\n", valid_pages_moved_count);
         last_print_time = current_time;
-        erased_blocks_count = 0;     // 카운트 초기화
-        valid_pages_moved_count = 0; // 카운트 초기화
+        erased_blocks_count = 0; // 카운트 초기화
     }
 
     victim_line = select_victim_line(ssd, force);
@@ -797,9 +794,6 @@ static int do_gc(struct ssd *ssd, bool force)
             clean_one_block(ssd, &ppa);
             mark_block_free(ssd, &ppa);
             erased_blocks_count++; // 회수된 블록 수 증가
-
-            // 유효 페이지가 이동할 때마다 카운트 증가
-            valid_pages_moved_count += ; /* 이동한 유효 페이지 수를 여기에 추가 */
 
             if (spp->enable_gc_delay)
             {
