@@ -3,12 +3,7 @@
 
 float io_count = 0;
 
-float gc_write_count = 0;
-float io_write_count = 0;
-
 time_t last_print_time = 0;
-
-int victim_count = 0;
 
 // #define FEMU_DEBUG_FTL
 
@@ -950,10 +945,12 @@ static void *ftl_thread(void *arg)
             case NVME_CMD_WRITE:
                 lat = ssd_write(ssd, req);
 
+                // io counting
                 io_count++;
 
                 time_t wr_current_time = time(NULL);
 
+                // print io count per sec
                 if (wr_current_time - last_print_time >= 1)
                 {
                     printf("io_count : %f\r\n", io_count);
@@ -966,10 +963,12 @@ static void *ftl_thread(void *arg)
             case NVME_CMD_READ:
                 lat = ssd_read(ssd, req);
 
+                // io counting
                 io_count++;
 
                 time_t re_current_time = time(NULL);
 
+                // print io count per sec
                 if (re_current_time - last_print_time >= 1)
                 {
                     printf("io_count : %f\r\n", io_count);
