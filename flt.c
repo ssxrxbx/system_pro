@@ -1,9 +1,14 @@
 #include "ftl.h"
 #include <time.h>
-#include <stdio.h>
 
 float io_count = 0;
+
+float gc_write_count = 0;
+float io_write_count = 0;
+
 time_t last_print_time = 0;
+
+int victim_count = 0;
 
 // #define FEMU_DEBUG_FTL
 
@@ -758,18 +763,15 @@ static int do_gc(struct ssd *ssd, bool force)
     struct nand_lun *lunp;
     struct ppa ppa;
     int ch, lun;
-    static int erased_blocks_count = 0; // 회수된 블록 수
-    static time_t last_print_time = 0; // 마지막 출력 시간
 
-    time_t current_time = time(NULL);
+    // time_t current_time = time(NULL);
 
-    // GC 수행 시 회수된 블록 수 증가
-    if (current_time - last_print_time >= 10)
-    {
-        printf("Erased blocks reclaimed during GC: %d\n", erased_blocks_count);
-        last_print_time = current_time;
-        erased_blocks_count = 0; // 카운트 초기화
-    }
+    // if (current_time - last_print_time >= 10)
+    // {
+    //     printf("Number of victim lines * blocks in the last 10 seconds: %d\r\n", victim_count);
+    //     last_print_time = current_time;
+    //     victim_count = 0;
+    // }
 
     victim_line = select_victim_line(ssd, force);
     if (!victim_line)
@@ -793,7 +795,6 @@ static int do_gc(struct ssd *ssd, bool force)
             lunp = get_lun(ssd, &ppa);
             clean_one_block(ssd, &ppa);
             mark_block_free(ssd, &ppa);
-            erased_blocks_count++; // 회수된 블록 수 증가
 
             if (spp->enable_gc_delay)
             {
@@ -921,26 +922,6 @@ static void *ftl_thread(void *arg)
     int rc;
     int i;
 
-    // CSV 파일 열기
-    FILE *csv_file = fopen("performance_data.csv", "w");
-    if (csv_file == NULL)
-    {
-        perror("Failed to open file");
-        return NULL;
-    }
-
-    // CSV 파일 헤더 작성
-    fprintf(csv_file, "time,iops,throughput,erased_blocks,valid_pages\n");
-
-    // IOPS 및 Throughput 기록을 위한 변수 추가
-    int io_count_per_second = 0;
-    double throughput_per_second = 0.0; // MB/s
-    time_t last_iops_time = time(NULL);
-    uint64_t total_bytes = 0;               // 총 전송된 바이트 수
-    static int erased_blocks_count = 0;     // 회수된 블록 수
-    static int valid_pages_moved_count = 0; // 이동한 유효 페이지 수
-    time_t last_gc_time = time(NULL);
-
     while (!*(ssd->dataplane_started_ptr))
     {
         usleep(100000);
@@ -968,43 +949,34 @@ static void *ftl_thread(void *arg)
             {
             case NVME_CMD_WRITE:
                 lat = ssd_write(ssd, req);
-                io_count_per_second++;                                         // IOPS 카운트 증가
-                total_bytes += req->nlb * ssd->sp.secs_per_pg * ssd->sp.secsz; // 전송된 바이트 수 증가
 
-                // IOPS 및 Throughput을 1초마다 기록
-                if (time(NULL) - last_iops_time >= 1)
+                io_count++;
+
+                time_t wr_current_time = time(NULL);
+
+                if (wr_current_time - last_print_time >= 1)
                 {
-                    throughput_per_second = (total_bytes / (1024.0 * 1024.0)); // MB로 변환
-                    fprintf(csv_file, "%ld,%d,%.2f,%d,%d\n", time(NULL), io_count_per_second, throughput_per_second, erased_blocks_count, valid_pages_moved_count);
-                    last_iops_time = time(NULL);
-                    io_count_per_second = 0; // 카운트 초기화
-                    total_bytes = 0;         // 바이트 수 초기화
+                    printf("io_count : %f\r\n", io_count);
+                    last_print_time = wr_current_time;
+                    io_count = 0;
                 }
 
-                // GC 수행 시 회수된 블록 수 및 이동한 유효 페이지 수 증가
-                if (time(NULL) - last_gc_time >= 10)
-                {
-                    printf("Erased blocks reclaimed during GC: %d\n", erased_blocks_count);
-                    printf("Valid pages moved during GC: %d\n", valid_pages_moved_count);
-                    last_gc_time = time(NULL);
-                    erased_blocks_count = 0;     // 카운트 초기화
-                    valid_pages_moved_count = 0; // 카운트 초기화
-                }
                 break;
+
             case NVME_CMD_READ:
                 lat = ssd_read(ssd, req);
-                io_count_per_second++;                                         // IOPS 카운트 증가
-                total_bytes += req->nlb * ssd->sp.secs_per_pg * ssd->sp.secsz; // 전송된 바이트 수 증가
 
-                // IOPS 및 Throughput을 1초마다 출력
-                if (time(NULL) - last_iops_time >= 1)
+                io_count++;
+
+                time_t re_current_time = time(NULL);
+
+                if (re_current_time - last_print_time >= 1)
                 {
-                    throughput_per_second = (total_bytes / (1024.0 * 1024.0)); // MB로 변환
-                    printf("IOPS: %d, Throughput: %.2f MB/s\n", io_count_per_second, throughput_per_second);
-                    last_iops_time = time(NULL);
-                    io_count_per_second = 0; // 카운트 초기화
-                    total_bytes = 0;         // 바이트 수 초기화
+                    printf("io_count : %f\r\n", io_count);
+                    last_print_time = re_current_time;
+                    io_count = 0;
                 }
+
                 break;
             case NVME_CMD_DSM:
                 lat = 0;
@@ -1031,7 +1003,5 @@ static void *ftl_thread(void *arg)
         }
     }
 
-    // CSV 파일 닫기
-    fclose(csv_file);
     return NULL;
 }
